@@ -1,0 +1,152 @@
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Secure RSA Chatroom</title>
+    <style>
+      body { margin: 0; padding-bottom: 3rem; font-family: Arial, sans-serif; background-color: #333; color: white; }
+      #form { background: rgba(0, 0, 0, 0.15); padding: 0.25rem; position: fixed; bottom: 0; left: 0; right: 0; display: flex; height: 3rem; box-sizing: border-box; backdrop-filter: blur(10px); }
+      #input { border: none; padding: 0 1rem; flex-grow: 1; border-radius: 2rem; margin: 0.25rem; }
+      #input:focus { outline: none; }
+      #form > button { background: #efefef; border: none; padding: 0 1rem; margin: 0.25rem; border-radius: 3px; color: #333; }
+      #messages { list-style-type: none; margin: 0; padding: 0; }
+      #messages > li { padding: 0.5rem 1rem; background: #2c2827; }
+    </style>
+  </head>
+  <body>
+    <div id="username-container">
+      <label for="username">Enter your name:</label>
+      <input type="text" id="username" placeholder="Your Name">
+      <button id="set-username">Set Name</button>
+    </div>
+    <ul id="messages"></ul>
+    <form id="form" action="">
+      <input id="input" autocomplete="off" /><button>Send</button>
+    </form>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io("http://192.168.1.5:3000/");
+  const form = document.getElementById('form');
+  const input = document.getElementById('input');
+  const messages = document.getElementById('messages');
+
+  
+
+  let serverProd, serverPub;
+  let myPriv, myPub, myProd;
+
+  function mod_pow(base, exponent, mod) {
+    let result = 1;
+    base = base % mod;
+    while (exponent > 0) {
+      if (exponent % 2 === 1) result = (result * base) % mod;
+      base = (base * base) % mod;
+      exponent = Math.floor(exponent / 2);
+    }
+    return result;
+  }
+
+  function encrypt_RSA(text, pub, prod) {
+    return text.split('').map(c => mod_pow(c.charCodeAt(0), pub, prod));
+  }
+
+  function decrypt_RSA(arr, priv, prod) {
+    return arr.map(num => mod_pow(num, priv, prod)).map(c => String.fromCharCode(c)).join('');
+  }
+
+  function extended_euclidean(a, b) {
+    if (b === 0) return [a, 1, 0];
+    let [gcd, x1, y1] = extended_euclidean(b, a % b);
+    return [gcd, y1, x1 - Math.floor(a / b) * y1];
+  }
+
+  function mod_inverse(e, phi_n) {
+    let [gcd, x] = extended_euclidean(e, phi_n);
+    if (gcd !== 1) return null;
+    return (x % phi_n + phi_n) % phi_n;
+  }
+
+  function generate_Prime(min = 17, max = 100) {
+    while (true) {
+      let x = Math.floor(Math.random() * (max - min)) + min;
+      let isPrime = true;
+      for (let i = 2; i * i <= x; i++) {
+        if (x % i === 0) {
+          isPrime = false;
+          break;
+        }
+      }
+      if (isPrime) return x;
+    }
+  }
+
+  function gcd(a, b) {
+    return b === 0 ? a : gcd(b, a % b);
+  }
+
+  function generate_Keys() {
+    let p, q, n, phi, pubKey, privKey;
+    while (true) {
+      p = generate_Prime();
+      do {
+        q = generate_Prime();
+      } while (q === p);
+
+      n = p * q;
+      phi = (p - 1) * (q - 1);
+      pubKey = Math.floor(Math.random() * (phi - 2)) + 2;
+
+      if (gcd(pubKey, phi) !== 1) continue;
+
+      privKey = mod_inverse(pubKey, phi);
+      if (privKey !== null) break;
+    }
+    return { n, pubKey, privKey };
+  }
+  let username = ''
+  document.getElementById('set-username').addEventListener('click', () => {
+      const name = document.getElementById('username').value;
+      if (name) {
+        username = name;
+        document.getElementById('username-container').style.display = 'none'; // Hide name input
+        socket.emit('client_keys', { client_n: myProd, client_pub: myPub , username: username});
+      } else {
+        alert('Please enter a valid name');
+      }
+    });
+
+  socket.on('server_keys', ({ prod, pubKey }) => {
+    serverProd = prod;
+    serverPub = pubKey;
+
+    const myKeys = generate_Keys();
+    myProd = myKeys.n;
+    myPub = myKeys.pubKey;
+    myPriv = myKeys.privKey;
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (input.value && serverProd && serverPub) {
+      const encrypted = encrypt_RSA(input.value, serverPub, serverProd);
+      socket.emit('chat message', {msg: encrypted, sender: username});
+      console.log(`Emitted Message ${input.value} as ${encrypted}.`)
+      input.value = '';
+    }
+  });
+
+  socket.on('chat message', ({msg, sender}) => {
+    const item = document.createElement('li');
+    if (myPriv && myProd) {
+      const decoded = decrypt_RSA(msg, myPriv, myProd);
+      console.log(`Recieved Message ${msg} decoded to ${decoded}.`)
+      item.textContent = `${sender}: ${decoded}`;
+    } else {
+      item.textContent = '[Encrypted Message]';
+    }
+    messages.appendChild(item);
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+</script>
+  </body>
+</html>
